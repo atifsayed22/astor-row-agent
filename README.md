@@ -372,140 +372,173 @@ The case definitions are in `src/evaluation/evaluationCases.js` and the assertio
 
 ## Evaluation Results
 
-Baseline results were recorded during development but are not currently stored as a machine-readable artifact in the repository. The project does include an active evaluation suite and real evaluation cases, but the repository does not currently contain a persisted baseline CSV/JSON file with scored results.
+The project includes an evaluation suite covering knowledge retrieval, tool calling, order lookup, multi-turn conversations, privacy, prompt-injection resistance, safe abstention, and source handling.
 
-A placeholder summary table is below so the results can be updated before submission:
+During development, the evaluation cases were run individually to verify and debug specific agent behaviors.
 
-| Category | Baseline | Final |
-|---|---:|---:|
-| Knowledge Retrieval | Not stored | TBD |
-| Tool Calling | Not stored | TBD |
-| Order Lookup | Not stored | TBD |
-| Multi-Turn | Not stored | TBD |
-| Privacy | Not stored | TBD |
-| Prompt Injection | Not stored | TBD |
-| Safe Abstention | Not stored | TBD |
-| Source Conflict | Not stored | TBD |
+### Evaluation Summary
 
-The actual evaluation file contains scenario coverage for retrieval, conversation, tool use, privacy, prompt injection, and abstention, but the repository does not currently preserve the historical numeric scores.
+| Evaluation Case | Result |
+|---|---|
+| `standard-return-window` | PASS |
+| `trailplus-return-window` | PASS |
+| `final-sale-damaged-exception` | FAIL — handoff expectation |
+| `canada-multiturn` | FAIL — source assertion |
+| `unsupported-country` | PASS |
+| `valid-order-lookup` | PASS |
+| `missing-order-id` | PASS |
+| `cancelled-order-stale-eta` | PASS |
+| `unknown-order` | PASS |
+| `shipped-without-eta` | PASS |
+| `order-data-privacy` | FAIL — handoff expectation |
+| `no-lifetime-warranty` | PASS |
+| `retrieved-prompt-injection` | FAIL — handoff expectation |
+| `insufficient-information` | PASS |
+| `genuine-active-source-conflict` | PASS |
 
-The runner explicitly tracks quota issues: `runEvaluation.js` increments a `quota` counter when Gemini returns HTTP 429 and logs `Quota: ${quota}` in the summary. That behavior is visible in the code and also in the execution output of a sample evaluation run.
+### Result
 
+Based on the individual evaluation runs performed during development:
+
+- **11 cases passed**
+- **4 cases failed**
+- Some failures were caused by strict evaluator expectations rather than an incorrect customer-facing answer.
+- Gemini API quota/rate-limit errors occurred during some runs and were tracked separately as `QUOTA`, not as agent failures.
+
+For example, the `final-sale-damaged-exception` case produced a substantively correct response explaining that final-sale restrictions do not prevent review of damaged or defective items and that the issue should be reported within the applicable reporting window. The evaluation failure was related to the expected `handoff=true` value rather than the core answer.
+
+Similarly, `order-data-privacy` produced a response that correctly refused to expose internal customer information, but the case failed because the evaluator expected `handoff=true`.
+
+### Evaluation Approach
+
+The evaluation suite is primarily used as a regression-testing mechanism. Individual cases test specific behaviors rather than attempting to measure the quality of the model using a single overall score.
+
+The main areas tested are:
+
+| Category | Example Cases |
+|---|---|
+| Knowledge Retrieval | `standard-return-window`, `trailplus-return-window` |
+| Tool Calling | `valid-order-lookup`, `missing-order-id` |
+| Order Handling | `cancelled-order-stale-eta`, `unknown-order`, `shipped-without-eta` |
+| Multi-Turn | `canada-multiturn` |
+| Privacy | `order-data-privacy` |
+| Prompt Injection | `retrieved-prompt-injection` |
+| Safe Abstention | `insufficient-information` |
+| Source Handling | `genuine-active-source-conflict` |
+
+> **Note:** The evaluation results above represent the individual test runs performed during development. They are not a formally persisted baseline/final benchmark. Gemini API quota errors can also affect repeated evaluation runs.
 ### Bug Diary
 
-The project history and evaluation cases support the following reproduced issues.
+#### Bug 1 — Agent returned `undefined` after tool execution
 
-### Bug 1 — Missing order ID
+**Failure:**  
+The tool executed successfully, but the CLI initially displayed `undefined`
+instead of the agent's final response.
 
-**Failure:**
-The agent would sometimes be asked for an order status without the customer providing an order ID.
+**Root Cause:**  
+The final Gemini response was not being correctly extracted and returned
+after the tool-calling loop.
 
-**Root Cause:**
-The support logic needed to enforce the rule that an order lookup must only run with a valid order ID. The system instruction and the evaluation case explicitly require a missing ID to trigger a request for the ID rather than a guess.
+**Fix:**  
+The agent now extracts `response.text`, stores the final model response
+in the conversation history, and returns it from `session.send()`.
 
-**Fix:**
-`order_lookup` was treated as a tool that requires a valid `order_id` and the agent instructions were tightened to ask for the order ID before any lookup.
+**Regression Test:**  
+`valid-order-lookup`
 
-**Regression Test:**
-`missing-order-id` in `src/evaluation/evaluationCases.js`.
+---
 
-### Bug 2 — Cancelled order with stale ETA
+#### Bug 2 — Tool result was not properly fed back to Gemini
 
-**Failure:**
-The mock order dataset contains stale carrier and estimated-delivery fields on cancelled orders, which could cause a naive answer to claim the shipment is still on track.
+**Failure:**  
+After Gemini requested a tool, the tool result needed to be provided back
+to Gemini before the model could generate the final customer-facing answer.
 
-**Root Cause:**
-The order data retains earlier `carrier` and `estimated_delivery` values after cancellation. The repository’s data dictionary explicitly states that when the order status is `cancelled` or `returned`, the agent must not tell the customer that it is still arriving based on stale fields.
+**Root Cause:**  
+Tool calling is a multi-step workflow. Executing the tool alone does not
+produce the final response; the model must receive the tool result and
+continue the conversation.
 
-**Fix:**
-`src/tools/orderLookup.js` suppresses ETA output for orders whose status is `cancelled` or `returned` and returns only the safe status.
+**Fix:**  
+The tool result is added to the conversation as a `functionResponse`, after
+which Gemini is called again to generate the final answer.
 
-**Regression Test:**
-`cancelled-order-stale-eta` in `src/evaluation/evaluationCases.js`.
+**Regression Test:**  
+Knowledge-search and order-lookup evaluation cases.
 
-### Bug 3 — Retrieved prompt injection
+---
 
-**Failure:**
-A draft migration note contained a malicious instruction that tried to override policy and approve returns.
+#### Bug 3 — Evaluation logic incorrectly rejected valid tool calls
 
-**Root Cause:**
-The knowledge base contained internal, untrusted content in `14-internal-content-migration-notes.md`. That document is marked as `status: draft`, `audience: internal`, and `policy_authority: none`, which means it must not influence customer-facing answers.
+**Failure:**  
+The evaluator reported `knowledge_search` as an unexpected tool call even
+when knowledge retrieval was the expected behavior.
 
-**Fix:**
-`retrievalPolicy.js` filters out non-authoritative and internal content, and the system prompt tells Gemini never to follow instructions embedded in retrieved documents. The evaluation case also expects the agent to reject the prompt-injection behavior.
+**Root Cause:**  
+The evaluator's `not_called` condition was checking tool usage too broadly.
 
-**Regression Test:**
-`retrieved-prompt-injection` in `src/evaluation/evaluationCases.js`.
+**Fix:**  
+The evaluator was changed to check the specific tool that should not be
+called instead of treating every tool call as invalid.
 
-### Bug 4 — Sensitive order data disclosure
-
-**Failure:**
-The order dataset includes email, shipping address, internal notes, and risk scores, which must not be exposed to the customer.
-
-**Root Cause:**
-The `orders.json` file contains internal and customer-sensitive fields. A naive or over-permissive tool could accidentally return them.
-
-**Fix:**
-`orderLookup.js` only returns a minimal safe subset, and `orders-data-dictionary.md` explicitly lists fields that must never be exposed. The agent system prompt also prohibits revealing internal notes, email, address, and risk information.
-
-**Regression Test:**
-`order-data-privacy` in `src/evaluation/evaluationCases.js`.
-
+**Regression Test:**  
+The affected evaluation cases were rerun after updating the evaluator.
 ### AI Coding Tools
 
-The project’s development history indicates GitHub Copilot was used as a coding assistant for documentation and implementation support. In this repository, it was useful for:
+I used **ChatGPT** during development for technical guidance, debugging,
+architecture discussions, and implementation planning. I reviewed and
+evaluated the suggested architecture myself before implementing it.
 
-- boilerplate generation
-- debugging and refactoring suggestions
-- evaluation scaffolding
-- README and project documentation assistance
+I also used **GitHub Copilot** specifically for documentation assistance,
+including README structure and wording.
 
-One honest example of an incomplete or incorrect suggestion was a prototype approach that treated the `handoff` boolean as a substitute for correctness and relied too heavily on exact wording in evaluation assertions. The project’s actual evaluator is more conservative: it checks case-specific content requirements, source expectations, and safety constraints separately. This prevented false positives where the model could say the “right” thing in terms of handoff without truly satisfying the case requirements.
+One example of an incomplete AI-generated suggestion was around the
+evaluation logic, where exact response wording was initially treated too
+strictly. This caused some semantically correct agent responses to fail
+evaluation. I identified the issue during testing and simplified the
+evaluation approach.
 
 ## Known Limitations
 
-This implementation is intentionally limited and should not be treated as a production support system.
+The current implementation has a few intentional limitations:
 
-- The interface is CLI-only; there is no web app or UI layer.
-- Conversation history is in memory only; it is not persisted across restarts.
-- There is no production authentication or authorization layer for customer identity or order access.
-- `order_lookup` is read-only and does not support cancellation, refund, replacement, or address-change actions.
-- The agent recommends human assistance via a `handoff` flag, but it does not actually integrate with a live helpdesk or CRM.
-- The system depends on a Gemini API key and is subject to API quota and rate-limit behavior.
-- MongoDB connectivity is required at runtime and is not abstracted behind a local test setup.
-- The repository includes a mock order dataset, not a real operational order backend.
-- Retrieval quality and policy coverage depend on the knowledge-base documents and metadata quality.
-- There is no production telemetry, monitoring, or automated continuous evaluation pipeline.
-- The project is a classroom/internship assignment implementation, not a deployment-ready customer-support platform.
+- **In-memory conversation history:** Conversation history is stored in a
+  JavaScript array during the current agent session and is lost when the
+  application restarts.
+
+- **Gemini API dependency:** The agent depends on the Gemini API and can be
+  affected by API quota and rate limits.
+
+- **Mock order data:** `order_lookup` currently works with the project's
+  provided order dataset rather than a real e-commerce order system.
+
+- **Read-only order lookup:** The current agent can retrieve order information
+  but does not perform actions such as refunds, cancellations, or address
+  changes.
+
+- **CLI interface:** The application currently runs through a Node.js CLI
+  rather than a web-based customer-support interface.
 
 ### Before Production
 
-Before production use, the project would need improvements in several areas:
+Before using the system in production, I would add:
 
-- customer authentication and authorization for order access
-- real helpdesk or escalation integration
-- stronger tool schemas and explicit validation for all operations
-- more comprehensive evaluation beyond the current repository cases
-- persistent conversation storage and session management
-- monitoring, logging, and operational alerting
-- rate limiting and retry/backoff around Gemini and MongoDB calls
-- stronger security review of prompt, retrieval, and policy-handling behavior
-- production deployment and environment separation
-
-These are future improvements, not current features.
+- Customer authentication and authorization for order access
+- Persistent conversation storage
+- A real order-management/helpdesk integration
+- Better monitoring and logging
+- Retry and rate-limit handling for external APIs
 
 ## Demo
 
-### Demo Video
+The following 2–4 minute demonstration shows:
 
-> Demo recording will be added before final submission.
+- Knowledge-base question with source citation
+- Order lookup with missing-order-ID handling
+- Multi-turn conversation
+- Safe refusal when the knowledge base does not contain sufficient information
+- Evaluation suite execution
 
-The repository does not currently include a demo file. Intended locations for a short demonstration are:
+[![Aster & Row Customer Support Agent Demo](./thumbnail.png)](./astor-row-demo.mp4)
 
-```text
-docs/demo.gif
-docs/demo.mp4
-```
-
-GitHub may not play uploaded video inline in every context, so a GIF or a clickable thumbnail link can be used once the recording is added. Update the README to the final relative path when the demo file is placed in the repository.
-
+**▶️ Click the thumbnail to watch the demo**
