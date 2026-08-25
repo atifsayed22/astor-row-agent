@@ -37,7 +37,7 @@ The project does not implement a production ticketing system or a real human-han
 
 ## Architecture
 
-![Agent Architecture](./agent.png)
+![Agent Architecture](./agentDiag.png)
 
 The runtime flow in this repository is:
 
