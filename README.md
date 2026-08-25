@@ -539,6 +539,6 @@ The following 2–4 minute demonstration shows:
 - Safe refusal when the knowledge base does not contain sufficient information
 - Evaluation suite execution
 
-[![Aster & Row Customer Support Agent Demo](./thumbnail.png)](./astor-row-demo.mp4)
+[![Aster & Row Customer Support Agent Demo](./thumbnail.png)](https://github.com/atif-sayed/aster-row-agent/raw/refs/heads/main/aster-row-demo.mp4)
 
 **▶️ Click the thumbnail to watch the demo**
