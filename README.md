@@ -368,11 +368,6 @@ npm run evaluate -- valid-order-lookup
 
 The case definitions are in `src/evaluation/evaluationCases.js` and the assertion logic is in `src/evaluation/evaluator.js`.
 
-## Evaluation Results
-
-The project includes an evaluation suite covering knowledge retrieval, tool calling, order lookup, multi-turn conversations, privacy, prompt-injection resistance, safe abstention, and source handling.
-
-During development, the evaluation cases were run individually to verify and debug specific agent behaviors.
 
 ## Evaluation Results
 
