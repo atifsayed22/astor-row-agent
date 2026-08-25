@@ -1,0 +1,14 @@
+{
+  "dependencies": {
+    "@google/genai": "^2.18.0",
+    "dotenv": "^17.4.2",
+    "gray-matter": "^4.0.3",
+    "mongoose": "^9.9.3",
+    "uuid": "^14.0.2"
+  },
+  "type": "module",
+  "scripts": {
+    "evaluate": "node src/evaluation/runEvaluation.js" , 
+    "start": "node src/cli.js"
+  }
+}
